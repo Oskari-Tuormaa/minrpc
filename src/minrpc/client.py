@@ -94,7 +94,7 @@ class Client(object):
         """
         client._request("fork")
         conn, remote_recv, remote_send = ipc.create_ipc_connection()
-        ipc.send_pipe_fds(client._sock, remote_recv, remote_send)
+        ipc.send_pipe_fds(client._sock, remote_recv.detach_fd(), remote_send.detach_fd())
         _, (res,) = conn.recv()
         if res != "ready!":
             raise RuntimeError

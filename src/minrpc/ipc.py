@@ -101,7 +101,7 @@ def create_socketpair():
 
 def send_pipe_fds(sock, p_recv, p_send):
     """ Sends pipe fds over socket. """
-    socket.send_fds(sock, [" ".encode()], [p_recv.detach_fd(), p_send.detach_fd()])
+    socket.send_fds(sock, [" ".encode()], [p_recv, p_send])
 
 
 def receive_pipe_fds(sock):
