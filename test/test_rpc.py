@@ -37,8 +37,8 @@ class TestRPC(unittest.TestCase):
 
         svc2 = Client.fork_client(svc1)
 
-        pid1 = svc1._request("function_call", "os", "getpid", [], {})
-        pid2 = svc2._request("function_call", "os", "getpid", [], {})
+        pid1 = svc1.get_module("os").getpid()
+        pid2 = svc2.get_module("os").getpid()
 
         self.assertNotEqual(pid1, pid2)
 
