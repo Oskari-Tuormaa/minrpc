@@ -5,6 +5,7 @@ RPC service utilities.
 from __future__ import absolute_import
 
 import logging
+import os
 import traceback
 import sys
 
@@ -24,16 +25,17 @@ class Service(object):
     Counterpart to :class:`Client`.
     """
 
-    def __init__(self, conn):
+    def __init__(self, conn, sock):
         """Initialize the service with a :class:`Connection` like object."""
         self._conn = conn
+        self._sock = sock
 
     @classmethod
     def stdio_main(cls, args):
         """Do the full job of preparing and running an RPC service."""
-        conn = ipc.prepare_subprocess_ipc(args)
+        conn, sock = ipc.prepare_subprocess_ipc(args)
         try:
-            svc = cls(conn)
+            svc = cls(conn, sock)
             svc.configure_logging()
             svc.run()
         finally:
@@ -105,6 +107,12 @@ class Service(object):
     def _dispatch_close(self):
         """Close the connection gracefully as initiated by the client."""
         self._conn.close()
+        self._sock.close()
+
+    def _dispatch_fork(self):
+        if os.fork() == 0:
+            self._conn = ipc.receive_pipe_fds(self._sock)
+            return "ready!"
 
     def _reply_data(self, data):
         """Return data to the client."""

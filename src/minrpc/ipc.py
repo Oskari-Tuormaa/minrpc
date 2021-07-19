@@ -5,6 +5,7 @@ IPC utilities.
 from __future__ import absolute_import
 
 import os
+import socket
 import subprocess
 import sys
 
@@ -86,6 +87,34 @@ def create_ipc_connection():
     return conn, remote_recv, remote_send
 
 
+def create_socketpair():
+    """
+    Creates a local/remote socketpair that can be used for
+        IPC with a subprocess.
+
+    Return (socket_local, socket_remote)
+    """
+    s_local, s_remote = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    os.set_inheritable(s_remote.fileno(), True)
+    return s_local, s_remote
+
+
+def send_pipe_fds(sock, p_recv, p_send):
+    """ Sends pipe fds over socket. """
+    socket.send_fds(sock, [" ".encode()], [p_recv.detach_fd(), p_send.detach_fd()])
+
+
+def receive_pipe_fds(sock):
+    """
+    Receives pipe fds over socket using socket.recv_fds, and returns a new
+        connection made from the received fds.
+
+    Return (conn)
+    """
+    _, (recv_fd, send_fd), _, _ = socket.recv_fds(sock, 1024, 2)
+    return Connection.from_fd(recv_fd, send_fd)
+
+
 def spawn_subprocess(argv, **Popen_args):
     """
     Spawn a subprocess and pass to it two IPC handles.
@@ -97,7 +126,8 @@ def spawn_subprocess(argv, **Popen_args):
     Return (ipc_connection, process).
     """
     conn, remote_recv, remote_send = create_ipc_connection()
-    args = argv + [str(int(remote_recv)), str(int(remote_send))]
+    local_socket, remote_socket = create_socketpair()
+    args = argv + [str(int(remote_recv)), str(int(remote_send)), str(int(remote_socket.fileno()))]
     with open(os.devnull, 'w+') as devnull:
         for stream in ('stdout', 'stderr', 'stdin'):
             # Check whether it was explicitly disabled (`False`) rather than
@@ -109,23 +139,27 @@ def spawn_subprocess(argv, **Popen_args):
     # wait for subprocess to confirm that all handles are closed:
     if conn.recv() != 'ready':
         raise RuntimeError
-    return conn, proc
+    remote_socket.close()
+    return conn, local_socket, proc
 
 
 def prepare_subprocess_ipc(args):
     """
     Prepare this process for IPC with its parent. Close all the open handles
     except for the STDIN/STDOUT/STDERR and the IPC handles. Return a
-    :class:`Connection` to the parent process.
+    :class:`Connection` and socket to the parent process.
     """
-    handles = [Handle(int(arg)) for arg in args]
+    sock_fd = int(args[2])
+    sock    = socket.socket(fileno=sock_fd, family=socket.AF_UNIX, type=socket.SOCK_STREAM)
+    handles = [Handle(int(arg)) for arg in args[:2]]
     recv_fd = handles[0].detach_fd()
     send_fd = handles[1].detach_fd()
     conn = Connection.from_fd(recv_fd, send_fd)
     close_all_but([sys.stdin.fileno(),
                    sys.stdout.fileno(),
                    sys.stderr.fileno(),
-                   recv_fd, send_fd])
+                   recv_fd, send_fd,
+                   sock_fd])
     # On python2/windows open() creates a non-inheritable file descriptor with
     # an underlying inheritable file HANDLE. Since HANDLEs can't be closed
     # with os.closerange, the following snippet is needed to prevent them from
@@ -133,4 +167,4 @@ def prepare_subprocess_ipc(args):
     for handle in conn.recv():
         Handle(handle).close()
     conn.send('ready')
-    return conn
+    return conn, sock

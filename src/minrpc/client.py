@@ -48,9 +48,10 @@ class Client(object):
 
     module = 'minrpc.service'
 
-    def __init__(self, conn, lock=None, proc=None):
+    def __init__(self, conn, sock, lock=None, proc=None):
         """Initialize the client with a :class:`Connection` like object."""
         self._conn = conn
+        self._sock = sock
         self._good = True
         self._lock = lock or NoLock()
         self._proc = proc
@@ -80,14 +81,31 @@ class Client(object):
         streams.
         """
         args = [sys.executable, '-m', cls.module]
-        conn, proc = ipc.spawn_subprocess(args, **Popen_args)
-        return cls(conn, lock=lock, proc=proc), proc
+        conn, sock, proc = ipc.spawn_subprocess(args, **Popen_args)
+        return cls(conn, sock, lock=lock, proc=proc), proc
+
+    @classmethod
+    def fork_client(cls, client):
+        """
+        Forks the given client.
+
+        This is achieved by calling the 'fork' dispatcher on the remote
+            service, and exchanging new pipe fds over the socket.
+        """
+        client._request("fork")
+        conn, remote_recv, remote_send = ipc.create_ipc_connection()
+        ipc.send_pipe_fds(client._sock, remote_recv, remote_send)
+        _, (res,) = conn.recv()
+        if res != "ready!":
+            raise RuntimeError
+        return cls(conn, client._sock, client._lock, client._proc)
 
     def close(self):
         """Close the connection gracefully, stop the remote service."""
         if self.good:
             self._conn.send(('close', ()))
         self._conn.close()
+        self._sock.close()
         if self._proc:
             self._proc.wait()
 
