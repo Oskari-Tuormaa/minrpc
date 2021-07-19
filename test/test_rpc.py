@@ -32,6 +32,16 @@ class TestRPC(unittest.TestCase):
 
     # TODO: add tests to check that other resources get closed correctly.
 
+    def test_fork(self):
+        svc1, proc = Client.spawn_subprocess()
+
+        svc2 = Client.fork_client(svc1)
+
+        pid1 = svc1._request("function_call", "os", "getpid", [], {})
+        pid2 = svc2._request("function_call", "os", "getpid", [], {})
+
+        self.assertNotEqual(pid1, pid2)
+
 
 if __name__ == '__main__':
     unittest.main()
