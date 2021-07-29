@@ -41,17 +41,16 @@ class Client(object):
     """
     Base class for a very lightweight synchronous RPC client.
 
-    Uses a connection that shares the interface with :class:`Connection` to
+    Uses a connection that shares the interface with socket to
     do synchronous RPC. Synchronous IO means that currently callbacks /
     events are impossible.
     """
 
     module = 'minrpc.service'
 
-    def __init__(self, conn, sock, lock=None, proc=None):
-        """Initialize the client with a :class:`Connection` like object."""
-        self._conn = conn
-        self._sock = sock
+    def __init__(self, sock, lock=None, proc=None):
+        """Initialize the client with a socket object."""
+        self._conn = sock
         self._good = True
         self._lock = lock or NoLock()
         self._proc = proc
@@ -81,8 +80,8 @@ class Client(object):
         streams.
         """
         args = [sys.executable, '-m', cls.module]
-        conn, sock, proc = ipc.spawn_subprocess(args, **Popen_args)
-        return cls(conn, sock, lock=lock, proc=proc), proc
+        sock, proc = ipc.spawn_subprocess(args, **Popen_args)
+        return cls(sock, lock=lock, proc=proc), proc
 
     @classmethod
     def fork_client(cls, client):
@@ -90,29 +89,31 @@ class Client(object):
         Forks the given client.
 
         This is achieved by calling the 'fork' dispatcher on the remote
-            service, and exchanging new pipe fds over the socket.
+            service, and replacing the existing socket IPC connection
+            for a new one.
         """
         client._request("fork")
-        conn, remote_recv, remote_send = ipc.create_ipc_connection()
-        ipc.send_pipe_fds(client._sock, remote_recv.detach_fd(), remote_send.detach_fd())
-        _, (res,) = conn.recv()
+        new_socket_local, new_socket_remote = ipc.create_socketpair()
+        client._conn.send_fd(new_socket_remote.fileno())
+        _, (res,) = new_socket_local.recv()
         if res != "ready!":
             raise RuntimeError
-        return cls(conn, client._sock, client._lock, client._proc)
+        new_socket_remote.close()
+        client._conn.send("done")
+        return cls(new_socket_local, client._lock, client._proc)
 
     def close(self):
         """Close the connection gracefully, stop the remote service."""
         if self.good:
             self._conn.send(('close', ()))
         self._conn.close()
-        self._sock.close()
-        if self._proc:
-            self._proc.wait()
+        # if self._proc:
+            # self._proc.wait()
 
     @property
     def closed(self):
         """Check if connection is closed."""
-        return self._conn.closed
+        return self._conn.closed()
 
     def _request(self, kind, *args):
         """Communicate with the remote service synchronously."""

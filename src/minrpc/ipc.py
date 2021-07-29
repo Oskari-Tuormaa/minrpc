@@ -4,12 +4,13 @@ IPC utilities.
 
 from __future__ import absolute_import
 
+import array
 import os
 import socket
 import subprocess
 import sys
 
-from .connection import Connection
+from .connection import Connection, SerializedSocket
 
 py2 = sys.version_info[0] == 2
 win = sys.platform == 'win32'
@@ -96,12 +97,17 @@ def create_socketpair():
     """
     s_local, s_remote = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     os.set_inheritable(s_remote.fileno(), True)
-    return s_local, s_remote
+    return SerializedSocket(s_local), s_remote
 
 
 def send_pipe_fds(sock, p_recv, p_send):
     """ Sends pipe fds over socket. """
     socket.send_fds(sock, [" ".encode()], [p_recv, p_send])
+
+
+def send_socket_fd(sock, sock_fd):
+    """ Sends socket fd over socket. """
+    sock.sendmsg([" ".encode()], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [sock_fd]))])   
 
 
 def receive_pipe_fds(sock):
@@ -115,19 +121,29 @@ def receive_pipe_fds(sock):
     return Connection.from_fd(recv_fd, send_fd)
 
 
+def receive_socket_fd(sock):
+    """ Receives socket fd over socket. """
+    fds = array.array("i")   # Array of ints
+    _, ancdata, _, _ = sock.recvmsg(1024, socket.CMSG_LEN(fds.itemsize))
+    for cmsg_level, cmsg_type, cmsg_data in ancdata:
+        if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
+            # Append data, ignoring any truncated integers at the end.
+            fds.frombytes(cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
+    return list(fds)
+
+
 def spawn_subprocess(argv, **Popen_args):
     """
-    Spawn a subprocess and pass to it two IPC handles.
+    Spawn a subprocess and pass to it a socket IPC handle.
 
     You can use the keyword arguments to pass further arguments to
     Popen, which is useful for example, if you want to redirect STDIO
     streams.
 
-    Return (ipc_connection, process).
+    Return (ipc_serialized_socket, process).
     """
-    conn, remote_recv, remote_send = create_ipc_connection()
     local_socket, remote_socket = create_socketpair()
-    args = argv + [str(int(remote_recv)), str(int(remote_send)), str(int(remote_socket.fileno()))]
+    args = argv + [str(int(remote_socket.fileno()))]
     with open(os.devnull, 'w+') as devnull:
         for stream in ('stdout', 'stderr', 'stdin'):
             # Check whether it was explicitly disabled (`False`) rather than
@@ -135,36 +151,30 @@ def spawn_subprocess(argv, **Popen_args):
             if Popen_args.get(stream) is False:
                 Popen_args[stream] = devnull
         proc = subprocess.Popen(args, close_fds=False, **Popen_args)
-    conn.send(_get_open_file_handles())
+    local_socket.send(_get_open_file_handles())
     # wait for subprocess to confirm that all handles are closed:
-    if conn.recv() != 'ready':
+    if local_socket.recv() != 'ready':
         raise RuntimeError
     remote_socket.close()
-    return conn, local_socket, proc
+    return local_socket, proc
 
 
-def prepare_subprocess_ipc(args):
+def prepare_subprocess_ipc(sock_fd):
     """
     Prepare this process for IPC with its parent. Close all the open handles
     except for the STDIN/STDOUT/STDERR and the IPC handles. Return a
-    :class:`Connection` and socket to the parent process.
+    socket to the parent process.
     """
-    sock_fd = int(args[2])
-    sock    = socket.socket(fileno=sock_fd, family=socket.AF_UNIX, type=socket.SOCK_STREAM)
-    handles = [Handle(int(arg)) for arg in args[:2]]
-    recv_fd = handles[0].detach_fd()
-    send_fd = handles[1].detach_fd()
-    conn = Connection.from_fd(recv_fd, send_fd)
+    sock = SerializedSocket.from_fd(sock_fd)
     close_all_but([sys.stdin.fileno(),
                    sys.stdout.fileno(),
                    sys.stderr.fileno(),
-                   recv_fd, send_fd,
                    sock_fd])
     # On python2/windows open() creates a non-inheritable file descriptor with
     # an underlying inheritable file HANDLE. Since HANDLEs can't be closed
     # with os.closerange, the following snippet is needed to prevent them from
     # staying open in the remote process:
-    for handle in conn.recv():
+    for handle in sock.recv():
         Handle(handle).close()
-    conn.send('ready')
-    return conn, sock
+    sock.send('ready')
+    return sock

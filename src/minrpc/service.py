@@ -10,6 +10,7 @@ import traceback
 import sys
 
 from . import ipc
+from .connection import SerializedSocket
 
 
 __all__ = [
@@ -25,21 +26,20 @@ class Service(object):
     Counterpart to :class:`Client`.
     """
 
-    def __init__(self, conn, sock):
-        """Initialize the service with a :class:`Connection` like object."""
-        self._conn = conn
-        self._sock = sock
+    def __init__(self, sock):
+        """Initialize the service with a socket."""
+        self._conn = sock
 
     @classmethod
-    def stdio_main(cls, args):
+    def stdio_main(cls, socket_fd):
         """Do the full job of preparing and running an RPC service."""
-        conn, sock = ipc.prepare_subprocess_ipc(args)
+        sock = ipc.prepare_subprocess_ipc(socket_fd)
         try:
-            svc = cls(conn, sock)
+            svc = cls(sock)
             svc.configure_logging()
             svc.run()
         finally:
-            conn.close()
+            sock.close()
 
     def configure_logging(self):
         """Configure logging module."""
@@ -90,8 +90,12 @@ class Service(object):
         else:
             try:
                 self._reply_data(response)
-            except ValueError:
-                if self._conn.closed:
+                if kind == "fork" and response == None:
+                    while self._conn.peek_next() != "done":
+                        pass
+                    self._conn.recv()
+            except (ValueError, OSError):
+                if self._conn.closed():
                     return False
                 raise
         return True
@@ -107,11 +111,11 @@ class Service(object):
     def _dispatch_close(self):
         """Close the connection gracefully as initiated by the client."""
         self._conn.close()
-        self._sock.close()
 
     def _dispatch_fork(self):
-        if os.fork() == 0:
-            self._conn = ipc.receive_pipe_fds(self._sock)
+        """Fork the service and recieve a new socket for IPC."""
+        if os.fork() != 0:
+            self._conn = SerializedSocket.from_fd(self._conn.recv_fd())
             return "ready!"
 
     def _reply_data(self, data):
@@ -125,4 +129,4 @@ class Service(object):
 
 
 if __name__ == '__main__':
-    Service.stdio_main(sys.argv[1:])
+    Service.stdio_main(int(sys.argv[1]))
