@@ -108,8 +108,8 @@ class SerializedSocket(object):
         # '-1' instructs pickle to use the latest protocol version. This
         # improves performance by a factor ~50-100 in my tests:
         payload = pickle.dumps(data, -1)
-        self._sock.send(HEADER.pack(len(payload)))
-        self._sock.send(payload)
+        head = HEADER.pack(len(payload))
+        self._sock.send(head+payload)
 
     def send_fd(self, fd):
         self._sock.sendmsg([HEADER.pack(0)], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [fd]))])
