@@ -113,9 +113,9 @@ class Client(object):
                 # TODO: The client probably shouldn't send TERMSIG,
                 # but it's a fix for otherwise waiting indefinitely
                 # for the remote process to finish.
-                os.kill(self._proc_pid, 15)
+                os.kill(self._proc_pid, 9)
                 os.waitpid(self._proc_pid, 0)
-            except ChildProcessError:
+            except (ChildProcessError, ProcessLookupError):
                 # PID didn't exist -> process has already closed.
                 pass
 
