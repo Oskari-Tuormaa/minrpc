@@ -4,6 +4,7 @@ RPC client utilities.
 
 from __future__ import absolute_import
 
+import os
 import sys
 
 from . import ipc
@@ -48,12 +49,12 @@ class Client(object):
 
     module = 'minrpc.service'
 
-    def __init__(self, sock, lock=None, proc=None):
+    def __init__(self, sock, lock=None, proc_pid=None):
         """Initialize the client with a socket object."""
         self._conn = sock
         self._good = True
         self._lock = lock or NoLock()
-        self._proc = proc
+        self._proc_pid = proc_pid
 
     def __del__(self):
         """Close the client and the associated connection with it."""
@@ -81,7 +82,7 @@ class Client(object):
         """
         args = [sys.executable, '-m', cls.module]
         sock, proc = ipc.spawn_subprocess(args, **Popen_args)
-        return cls(sock, lock=lock, proc=proc), proc
+        return cls(sock, lock=lock, proc_pid=proc.pid), proc
 
     @classmethod
     def fork_client(cls, client):
@@ -95,20 +96,25 @@ class Client(object):
         client._request("fork")
         new_socket_local, new_socket_remote = ipc.create_socketpair()
         client._conn.send_fd(new_socket_remote.fileno())
-        _, (res,) = new_socket_local.recv()
-        if res != "ready!":
+        _, (new_pid,) = new_socket_local.recv()
+        _, (res_old,) = client._conn.recv()
+        if res_old != "ready":
             raise RuntimeError
         new_socket_remote.close()
-        client._conn.send("done")
-        return cls(new_socket_local, client._lock, client._proc)
+        return cls(new_socket_local, client._lock, int(new_pid))
 
     def close(self):
         """Close the connection gracefully, stop the remote service."""
         if self.good:
             self._conn.send(('close', ()))
         self._conn.close()
-        # if self._proc:
-            # self._proc.wait()
+        if self._proc_pid:
+            try:
+                os.kill(self._proc_pid, 15)
+                os.waitpid(self._proc_pid, 0)
+            except ChildProcessError:
+                # PID didn't exist / process has already closed.
+                pass
 
     @property
     def closed(self):

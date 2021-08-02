@@ -90,10 +90,6 @@ class Service(object):
         else:
             try:
                 self._reply_data(response)
-                if kind == "fork" and response == None:
-                    while self._conn.peek_next() != "done":
-                        pass
-                    self._conn.recv()
             except (ValueError, OSError):
                 if self._conn.closed():
                     return False
@@ -114,9 +110,12 @@ class Service(object):
 
     def _dispatch_fork(self):
         """Fork the service and recieve a new socket for IPC."""
+        self._conn.send(('data', (None,)))
+        new_conn = SerializedSocket.from_fd(self._conn.recv_fd())
         if os.fork() != 0:
-            self._conn = SerializedSocket.from_fd(self._conn.recv_fd())
-            return "ready!"
+            self._conn = new_conn
+            return str(os.getpid())
+        return "ready"
 
     def _reply_data(self, data):
         """Return data to the client."""
