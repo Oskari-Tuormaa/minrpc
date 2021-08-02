@@ -110,10 +110,13 @@ class Client(object):
         self._conn.close()
         if self._proc_pid:
             try:
+                # TODO: The client probably shouldn't send TERMSIG,
+                # but it's a fix for otherwise waiting indefinitely
+                # for the remote process to finish.
                 os.kill(self._proc_pid, 15)
                 os.waitpid(self._proc_pid, 0)
             except ChildProcessError:
-                # PID didn't exist / process has already closed.
+                # PID didn't exist -> process has already closed.
                 pass
 
     @property
