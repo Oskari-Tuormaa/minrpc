@@ -112,7 +112,7 @@ class Service(object):
         """Fork the service and recieve a new socket for IPC."""
         self._conn.send(('data', (None,)))
         new_conn = SerializedSocket.from_fd(self._conn.recv_fd())
-        if os.fork() != 0:
+        if os.fork() == 0:
             self._conn = new_conn
             return str(os.getpid())
         return "ready"
