@@ -114,7 +114,7 @@ class Service(object):
         new_conn = SerializedSocket.from_fd(self._conn.recv_fd())
         if os.fork() == 0:
             self._conn = new_conn
-            return str(os.getpid())
+            return str(os.P_PID)
         return "ready"
 
     def _reply_data(self, data):

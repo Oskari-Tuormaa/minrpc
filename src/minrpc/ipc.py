@@ -10,7 +10,7 @@ import socket
 import subprocess
 import sys
 
-from .connection import Connection, SerializedSocket
+from .connection import SerializedSocket
 
 py2 = sys.version_info[0] == 2
 win = sys.platform == 'win32'
@@ -73,21 +73,6 @@ def close_all_but(keep):
             os.closerange(s+1, e)
 
 
-def create_ipc_connection():
-    """
-    Create a connection that can be used for IPC with a subprocess.
-
-    Return (local_connection, remote_recv_handle, remote_send_handle).
-    """
-    local_recv, _remote_send = Handle.pipe()
-    _remote_recv, local_send = Handle.pipe()
-    remote_recv = _remote_recv.dup_inheritable()
-    remote_send = _remote_send.dup_inheritable()
-    conn = Connection.from_fd(local_recv.detach_fd(),
-                              local_send.detach_fd())
-    return conn, remote_recv, remote_send
-
-
 def create_socketpair():
     """
     Creates a local/remote socketpair that can be used for
@@ -98,38 +83,6 @@ def create_socketpair():
     s_local, s_remote = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
     os.set_inheritable(s_remote.fileno(), True)
     return SerializedSocket(s_local), s_remote
-
-
-def send_pipe_fds(sock, p_recv, p_send):
-    """ Sends pipe fds over socket. """
-    socket.send_fds(sock, [" ".encode()], [p_recv, p_send])
-
-
-def send_socket_fd(sock, sock_fd):
-    """ Sends socket fd over socket. """
-    sock.sendmsg([" ".encode()], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", [sock_fd]))])   
-
-
-def receive_pipe_fds(sock):
-    """
-    Receives pipe fds over socket using socket.recv_fds, and returns a new
-        connection made from the received fds.
-
-    Return (conn)
-    """
-    _, (recv_fd, send_fd), _, _ = socket.recv_fds(sock, 1024, 2)
-    return Connection.from_fd(recv_fd, send_fd)
-
-
-def receive_socket_fd(sock):
-    """ Receives socket fd over socket. """
-    fds = array.array("i")   # Array of ints
-    _, ancdata, _, _ = sock.recvmsg(1024, socket.CMSG_LEN(fds.itemsize))
-    for cmsg_level, cmsg_type, cmsg_data in ancdata:
-        if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
-            # Append data, ignoring any truncated integers at the end.
-            fds.frombytes(cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
-    return list(fds)
 
 
 def spawn_subprocess(argv, **Popen_args):
