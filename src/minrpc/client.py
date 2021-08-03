@@ -49,12 +49,12 @@ class Client(object):
 
     module = 'minrpc.service'
 
-    def __init__(self, sock, lock=None, proc_pid=None):
+    def __init__(self, sock, lock=None, proc=None):
         """Initialize the client with a socket object."""
         self._conn = sock
         self._good = True
         self._lock = lock or NoLock()
-        self._proc_pid = proc_pid
+        self._proc = proc
 
     def __del__(self):
         """Close the client and the associated connection with it."""
@@ -82,7 +82,7 @@ class Client(object):
         """
         args = [sys.executable, '-m', cls.module]
         sock, proc = ipc.spawn_subprocess(args, **Popen_args)
-        return cls(sock, lock=lock, proc_pid=proc.pid), proc
+        return cls(sock, lock=lock, proc=proc), proc
 
     @classmethod
     def fork_client(cls, client):
@@ -101,20 +101,20 @@ class Client(object):
         if res_old != "ready":
             raise RuntimeError
         new_socket_remote.close()
-        return cls(new_socket_local, client._lock, int(new_pid))
+        return cls(new_socket_local, client._lock, DummyProcess(int(new_pid)))
 
     def close(self):
         """Close the connection gracefully, stop the remote service."""
         if self.good:
             self._conn.send(('close', ()))
         self._conn.close()
-        if self._proc_pid:
+        if self._proc:
             try:
                 # TODO: The client probably shouldn't send TERMSIG,
                 # but it's a fix for otherwise waiting indefinitely
                 # for the remote process to finish.
-                os.kill(self._proc_pid, 9)
-                os.waitpid(self._proc_pid, 0)
+                os.kill(self._proc.pid, 9)
+                self._proc.wait()
             except (ChildProcessError, ProcessLookupError):
                 # PID didn't exist -> process has already closed.
                 pass
@@ -187,3 +187,13 @@ class RemoteModule(object):
             return self.__client._request('function_call', self.__module,
                                           funcname, args, kwargs)
         return DeferredMethod
+
+class DummyProcess(object):
+
+    """Dummy Process class for forked clients."""
+
+    def __init__(self, pid):
+        self.pid = pid
+
+    def wait(self):
+        os.waitid(os.P_PID, self.pid, os.WEXITED)
